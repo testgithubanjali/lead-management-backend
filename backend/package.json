@@ -5,7 +5,9 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "setup-db": "node setup-db.js",
+    "test-db": "node test-db-connection.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

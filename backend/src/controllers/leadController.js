@@ -1,6 +1,20 @@
 const pool = require("../config/db");
 
 // ─────────────────────────────────────────
+// Auto-migrate: ensure "notes" column exists
+// ─────────────────────────────────────────
+(async () => {
+  try {
+    await pool.query(`
+      ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT '';
+    `);
+    console.log("✅ Column 'notes' verified/added in leads table");
+  } catch (err) {
+    console.error("⚠️ Migration check failed:", err.message);
+  }
+})();
+
+// ─────────────────────────────────────────
 // GET /api/leads — Get all leads
 // ─────────────────────────────────────────
 const getAllLeads = async (req, res) => {
@@ -13,23 +27,11 @@ const getAllLeads = async (req, res) => {
       order = "DESC",
     } = req.query;
 
-    const allowedSort = [
-      "name",
-      "created_at",
-      "updated_at",
-      "status",
-      "source",
-    ];
-
+    const allowedSort = ["name", "created_at", "updated_at", "status", "source"];
     const allowedOrder = ["ASC", "DESC"];
 
-    const safeSort = allowedSort.includes(sort)
-      ? sort
-      : "created_at";
-
-    const safeOrder = allowedOrder.includes(order.toUpperCase())
-      ? order.toUpperCase()
-      : "DESC";
+    const safeSort = allowedSort.includes(sort) ? sort : "created_at";
+    const safeOrder = allowedOrder.includes(order.toUpperCase()) ? order.toUpperCase() : "DESC";
 
     let query = "SELECT * FROM public.leads WHERE 1=1";
     const params = [];
@@ -38,12 +40,10 @@ const getAllLeads = async (req, res) => {
       params.push(`%${search}%`);
       query += ` AND (name ILIKE $${params.length} OR phone ILIKE $${params.length})`;
     }
-
     if (status) {
       params.push(status);
       query += ` AND status = $${params.length}`;
     }
-
     if (source) {
       params.push(source);
       query += ` AND source = $${params.length}`;
@@ -52,20 +52,10 @@ const getAllLeads = async (req, res) => {
     query += ` ORDER BY ${safeSort} ${safeOrder}`;
 
     const result = await pool.query(query, params);
-
-    res.status(200).json({
-      success: true,
-      count: result.rows.length,
-      data: result.rows,
-    });
+    res.status(200).json({ success: true, count: result.rows.length, data: result.rows });
   } catch (error) {
     console.error("Error fetching leads:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch leads",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: "Failed to fetch leads", error: error.message });
   }
 };
 
@@ -87,30 +77,13 @@ const getLeadStats = async (req, res) => {
         COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days') AS this_month
       FROM public.leads
     `;
-
     const result = await pool.query(statsQuery);
     const stats = result.rows[0];
-
-    const conversionRate =
-      stats.total > 0
-        ? ((stats.converted / stats.total) * 100).toFixed(1)
-        : 0;
-
-    res.status(200).json({
-      success: true,
-      data: {
-        ...stats,
-        conversion_rate: parseFloat(conversionRate),
-      },
-    });
+    const conversionRate = stats.total > 0 ? ((stats.converted / stats.total) * 100).toFixed(1) : 0;
+    res.status(200).json({ success: true, data: { ...stats, conversion_rate: parseFloat(conversionRate) } });
   } catch (error) {
     console.error("Error fetching stats:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch statistics",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: "Failed to fetch statistics", error: error.message });
   }
 };
 
@@ -120,31 +93,14 @@ const getLeadStats = async (req, res) => {
 const getLeadById = async (req, res) => {
   try {
     const { id } = req.params;
-
-    const result = await pool.query(
-      "SELECT * FROM public.leads WHERE id = $1",
-      [id]
-    );
-
+    const result = await pool.query("SELECT * FROM public.leads WHERE id = $1", [id]);
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: `Lead with ID ${id} not found`,
-      });
+      return res.status(404).json({ success: false, message: `Lead with ID ${id} not found` });
     }
-
-    res.status(200).json({
-      success: true,
-      data: result.rows[0],
-    });
+    res.status(200).json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error("Error fetching lead:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch lead",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: "Failed to fetch lead", error: error.message });
   }
 };
 
@@ -153,13 +109,10 @@ const getLeadById = async (req, res) => {
 // ─────────────────────────────────────────
 const createLead = async (req, res) => {
   try {
-    const {
-      name,
-      phone,
-      source,
-      status = "Interested",
-      notes = "",
-    } = req.body;
+    console.log("📥 Request body:", req.body);
+    console.log("📄 File:", __filename);
+
+    const { name, phone, source, status = "Interested", notes = "" } = req.body;
 
     const existing = await pool.query(
       "SELECT id FROM public.leads WHERE phone = $1",
@@ -167,41 +120,19 @@ const createLead = async (req, res) => {
     );
 
     if (existing.rows.length > 0) {
-      return res.status(409).json({
-        success: false,
-        message: "A lead with this phone number already exists",
-      });
+      return res.status(409).json({ success: false, message: "A lead with this phone number already exists" });
     }
 
-    const result = await pool.query(
-      `
-      INSERT INTO public.leads
-      (name, phone, source, status, notes)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING *
-      `,
-      [
-        name?.trim(),
-        phone?.trim(),
-        source,
-        status,
-        notes,
-      ]
-    );
+    const insertQuery = `INSERT INTO public.leads (name, phone, source, status, notes) VALUES ($1, $2, $3, $4, $5) RETURNING *`;
+    const insertValues = [name?.trim(), phone?.trim(), source, status, notes];
+    console.log("🔍 Query:", insertQuery);
+    console.log("🔍 Values:", insertValues);
+    const result = await pool.query(insertQuery, insertValues);
 
-    res.status(201).json({
-      success: true,
-      message: "Lead added successfully",
-      data: result.rows[0],
-    });
+    res.status(201).json({ success: true, message: "Lead added successfully", data: result.rows[0] });
   } catch (error) {
     console.error("Error creating lead:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to create lead",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: "Failed to create lead", error: error.message });
   }
 };
 
@@ -213,24 +144,12 @@ const updateLeadStatus = async (req, res) => {
     const { id } = req.params;
     const { status, notes } = req.body;
 
-    const validStatuses = [
-      "Interested",
-      "Not Interested",
-      "Converted",
-    ];
-
+    const validStatuses = ["Interested", "Not Interested", "Converted"];
     if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Status must be one of: ${validStatuses.join(", ")}`,
-      });
+      return res.status(400).json({ success: false, message: `Status must be one of: ${validStatuses.join(", ")}` });
     }
 
-    let query = `
-      UPDATE public.leads
-      SET status = $1
-    `;
-
+    let query = `UPDATE public.leads SET status = $1`;
     const params = [status];
 
     if (notes !== undefined) {
@@ -239,34 +158,16 @@ const updateLeadStatus = async (req, res) => {
     }
 
     params.push(id);
-
-    query += `
-      WHERE id = $${params.length}
-      RETURNING *
-    `;
+    query += ` WHERE id = $${params.length} RETURNING *`;
 
     const result = await pool.query(query, params);
-
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: `Lead with ID ${id} not found`,
-      });
+      return res.status(404).json({ success: false, message: `Lead with ID ${id} not found` });
     }
-
-    res.status(200).json({
-      success: true,
-      message: "Lead status updated successfully",
-      data: result.rows[0],
-    });
+    res.status(200).json({ success: true, message: "Lead status updated successfully", data: result.rows[0] });
   } catch (error) {
     console.error("Error updating lead:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to update lead status",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: "Failed to update lead status", error: error.message });
   }
 };
 
@@ -276,68 +177,38 @@ const updateLeadStatus = async (req, res) => {
 const updateLead = async (req, res) => {
   try {
     const { id } = req.params;
-
-    const {
-      name,
-      phone,
-      source,
-      status,
-      notes,
-    } = req.body;
+    const { name, phone, source, status, notes } = req.body;
 
     if (phone) {
       const existing = await pool.query(
-        `
-        SELECT id
-        FROM public.leads
-        WHERE phone = $1 AND id != $2
-        `,
+        `SELECT id FROM public.leads WHERE phone = $1 AND id != $2`,
         [phone, id]
       );
-
       if (existing.rows.length > 0) {
-        return res.status(409).json({
-          success: false,
-          message: "Phone number already used by another lead",
-        });
+        return res.status(409).json({ success: false, message: "Phone number already used by another lead" });
       }
     }
 
     const result = await pool.query(
-      `
-      UPDATE public.leads
-      SET
-        name = COALESCE($1, name),
-        phone = COALESCE($2, phone),
-        source = COALESCE($3, source),
-        status = COALESCE($4, status),
-        notes = COALESCE($5, notes)
-      WHERE id = $6
-      RETURNING *
-      `,
+      `UPDATE public.leads
+       SET
+         name   = COALESCE($1, name),
+         phone  = COALESCE($2, phone),
+         source = COALESCE($3, source),
+         status = COALESCE($4, status),
+         notes  = COALESCE($5, notes)
+       WHERE id = $6
+       RETURNING *`,
       [name, phone, source, status, notes, id]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: `Lead with ID ${id} not found`,
-      });
+      return res.status(404).json({ success: false, message: `Lead with ID ${id} not found` });
     }
-
-    res.status(200).json({
-      success: true,
-      message: "Lead updated successfully",
-      data: result.rows[0],
-    });
+    res.status(200).json({ success: true, message: "Lead updated successfully", data: result.rows[0] });
   } catch (error) {
     console.error("Error updating lead:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to update lead",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: "Failed to update lead", error: error.message });
   }
 };
 
@@ -347,36 +218,14 @@ const updateLead = async (req, res) => {
 const deleteLead = async (req, res) => {
   try {
     const { id } = req.params;
-
-    const result = await pool.query(
-      `
-      DELETE FROM public.leads
-      WHERE id = $1
-      RETURNING *
-      `,
-      [id]
-    );
-
+    const result = await pool.query(`DELETE FROM public.leads WHERE id = $1 RETURNING *`, [id]);
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: `Lead with ID ${id} not found`,
-      });
+      return res.status(404).json({ success: false, message: `Lead with ID ${id} not found` });
     }
-
-    res.status(200).json({
-      success: true,
-      message: "Lead deleted successfully",
-      data: result.rows[0],
-    });
+    res.status(200).json({ success: true, message: "Lead deleted successfully", data: result.rows[0] });
   } catch (error) {
     console.error("Error deleting lead:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to delete lead",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: "Failed to delete lead", error: error.message });
   }
 };
 
